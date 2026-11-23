@@ -104,18 +104,31 @@ build_ncurses() {
         return
     fi
     fetch_and_extract "https://invisible-mirror.net/archives/ncurses/$dir.tar.gz" "$dir"
+
+    # iOS 上没有 <sys/ttydev.h>（BSD 遗留头），ncurses 的 lib_baudrate.c 依赖它。
+    # 打补丁：用 <sys/ioctl.h> 替代（iOS 有 TIOCGETA 等定义）。
+    local baud="$WORK/$dir/ncurses/tinfo/lib_baudrate.c"
+    if [ -f "$baud" ] && grep -q "sys/ttydev.h" "$baud"; then
+        log "打补丁：lib_baudrate.c 去掉 sys/ttydev.h"
+        sed -i.bak 's|#include <sys/ttydev.h>|/* iOS: sys/ttydev.h 不存在，用 sys/ioctl.h 替代 */\n#include <sys/ioctl.h>|' "$baud"
+    fi
+
     log "配置 ncurses $ver"
     (
         cd "$WORK/$dir"
         ./configure --host=arm-apple-darwin \
             --prefix="$PREFIX" \
-            --with-shared --without-debug --without-ada \
-            --enable-widec --without-manpages \
+            --without-shared --without-debug --without-ada \
+            --enable-widec --without-manpages --without-progs \
             --disable-db-install
         log "编译 ncurses"
         make -j"$JOBS"
         make install
-    ) || die "ncurses 构建失败"
+    ) || {
+        # curses 是 Python 的可选模块，失败不该阻塞整体构建
+        log "⚠ ncurses 构建失败（curses 模块将不可用，其余不受影响）"
+        return 0
+    }
 }
 
 # ---------------------------------------------------------------- 4. libffi
@@ -159,7 +172,10 @@ build_readline() {
         log "编译 readline"
         make -j"$JOBS"
         make install
-    ) || die "readline 构建失败"
+    ) || {
+        log "⚠ readline 构建失败（readline 模块将不可用）"
+        return 0
+    }
 }
 
 # ---------------------------------------------------------------- 6. xz (liblzma)
@@ -215,5 +231,17 @@ build_readline
 build_xz
 build_sqlite
 
-log "完成。产物："
-ls -1 "$PREFIX/lib"/*.a 2>/dev/null | sed 's|^|  |' || log "  (无静态库)"
+log "完成。静态库产物："
+for lib in libssl.a libcrypto.a libffi.a liblzma.a libsqlite3.a libncursesw.a libreadline.a; do
+    if [ -f "$PREFIX/lib/$lib" ]; then
+        printf '  ✅ %s\n' "$lib"
+    else
+        printf '  ⚠ %s（缺失，对应模块不可用）\n' "$lib"
+    fi
+done
+echo
+log "必需：libssl.a libcrypto.a libffi.a liblzma.a libsqlite.a"
+for req in libssl.a libcrypto.a libffi.a liblzma.a libsqlite3.a; do
+    [ -f "$PREFIX/lib/$req" ] || die "缺少必需库：$req"
+done
+log "必需库齐全"
