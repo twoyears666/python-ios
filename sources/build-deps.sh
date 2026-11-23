@@ -51,25 +51,48 @@ fetch_and_extract() {
 log "zlib: 使用 iOS SDK 自带"
 
 # ---------------------------------------------------------------- 2. OpenSSL
-build_openssl() {
-    local ver="3.2.1"
-    local dir="openssl-$ver"
+# 不自己编！用 Procursus 的 libssl-dev（5.2 MB，含 139 个头文件 + libssl.a/libcrypto.a）
+# 好处：
+#   1. 版本与运行时库一致（3.2.1），不会 ABI 不匹配
+#   2. 省掉 10 分钟编译
+#   3. iOS 交叉编译 openssl 本身坑很多（ucontext/asm/dso）
+build_openssl_from_procursus() {
+    local url="https://apt.procurs.us/pool/main/iphoneos-arm64/1700/openssl/libssl-dev_3.2.1_iphoneos-arm.deb"
     if [ -f "$PREFIX/lib/libssl.a" ]; then
         log "OpenSSL 已存在，跳过"
         return
     fi
-    fetch_and_extract "https://www.openssl.org/source/$dir.tar.gz" "$dir"
-    log "配置 OpenSSL $ver"
+    local deb="$WORK/libssl-dev.deb"
+    if [ ! -f "$deb" ]; then
+        log "下载 Procursus libssl-dev"
+        curl -sSL --retry 3 -m 300 -o "$deb" "$url" || die "下载 libssl-dev 失败"
+    fi
+
+    log "解包 libssl-dev"
+    local extract="$WORK/libssl-dev"
+    rm -rf "$extract"; mkdir -p "$extract"
     (
-        cd "$WORK/$dir"
-        ./Configure ios64-cross no-shared no-tests no-asm \
-            --prefix="$PREFIX" \
-            --openssldir=/var/jb/etc/ssl \
-            CC="$CC" 2>&1 | tail -3
-        log "编译 OpenSSL"
-        make -j"$JOBS" 2>&1 | tail -3
-        make install_sw 2>&1 | tail -3
-    ) || die "OpenSSL 构建失败"
+        cd "$extract"
+        ar x "$deb" 2>/dev/null || die "ar 解包失败"
+        local dataf
+        dataf=$(ls data.tar.* 2>/dev/null | head -1)
+        [ -n "$dataf" ] || die "找不到 data.tar.*"
+        case "$dataf" in
+            *.zst) zstd -dc "$dataf" | tar xf - ;;
+            *.xz)  tar xJf "$dataf" ;;
+            *.gz)  tar xzf "$dataf" ;;
+            *)     die "未知压缩格式：$dataf" ;;
+        esac
+    ) || die "解包 data.tar 失败"
+
+    # 只拷头文件和静态库（不要 .dylib，避免和运行时冲突）
+    log "安装头文件和静态库到 $PREFIX"
+    mkdir -p "$PREFIX/include" "$PREFIX/lib"
+    cp -R "$extract/usr/include/openssl" "$PREFIX/include/" 2>/dev/null || die "拷头文件失败"
+    for lib in libssl.a libcrypto.a; do
+        [ -f "$extract/usr/lib/$lib" ] && cp "$extract/usr/lib/$lib" "$PREFIX/lib/"
+    done
+    log "OpenSSL: $(ls -1 "$PREFIX/lib"/lib{ssl,crypto}.a 2>/dev/null | wc -l | tr -d ' ') 个静态库, $(ls -1 "$PREFIX/include/openssl"/*.h 2>/dev/null | wc -l | tr -d ' ') 个头文件"
 }
 
 # ---------------------------------------------------------------- 3. ncurses
@@ -88,10 +111,10 @@ build_ncurses() {
             --prefix="$PREFIX" \
             --with-shared --without-debug --without-ada \
             --enable-widec --without-manpages \
-            --disable-db-install 2>&1 | tail -3
+            --disable-db-install
         log "编译 ncurses"
-        make -j"$JOBS" 2>&1 | tail -3
-        make install 2>&1 | tail -3
+        make -j"$JOBS"
+        make install
     ) || die "ncurses 构建失败"
 }
 
@@ -109,10 +132,10 @@ build_libffi() {
         cd "$WORK/$dir"
         ./configure --host=arm-apple-darwin \
             --prefix="$PREFIX" \
-            --enable-static --disable-shared 2>&1 | tail -3
+            --enable-static --disable-shared
         log "编译 libffi"
-        make -j"$JOBS" 2>&1 | tail -3
-        make install 2>&1 | tail -3
+        make -j"$JOBS"
+        make install
     ) || die "libffi 构建失败"
 }
 
@@ -132,10 +155,10 @@ build_readline() {
         ./configure --host=arm-apple-darwin \
             --prefix="$PREFIX" \
             --with-curses --enable-static --disable-shared \
-            bash_cv_wcwidth_broken=no 2>&1 | tail -3
+            bash_cv_wcwidth_broken=no
         log "编译 readline"
-        make -j"$JOBS" 2>&1 | tail -3
-        make install 2>&1 | tail -3
+        make -j"$JOBS"
+        make install
     ) || die "readline 构建失败"
 }
 
@@ -155,10 +178,10 @@ build_xz() {
             --prefix="$PREFIX" \
             --enable-static --disable-shared --disable-xz --disable-xzdec \
             --disable-lzmadec --disable-lzmainfo --disable-scripts \
-            --disable-doc 2>&1 | tail -3
+            --disable-doc
         log "编译 xz"
-        make -j"$JOBS" 2>&1 | tail -3
-        make install 2>&1 | tail -3
+        make -j"$JOBS"
+        make install
     ) || die "xz 构建失败"
 }
 
@@ -176,16 +199,16 @@ build_sqlite() {
         cd "$WORK/$dir"
         ./configure --host=arm-apple-darwin \
             --prefix="$PREFIX" \
-            --enable-static --disable-shared 2>&1 | tail -3
+            --enable-static --disable-shared
         log "编译 sqlite"
-        make -j"$JOBS" 2>&1 | tail -3
-        make install 2>&1 | tail -3
+        make -j"$JOBS"
+        make install
     ) || die "sqlite 构建失败"
 }
 
 # ---------------------------------------------------------------- 执行
 log "构建依赖到 $PREFIX"
-build_openssl
+build_openssl_from_procursus
 build_ncurses
 build_libffi
 build_readline
