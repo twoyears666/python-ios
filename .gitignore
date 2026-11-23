@@ -1,0 +1,8 @@
+work/
+deps/
+deps-work/
+dist/
+*.deb
+*.tar.xz
+*.tar.gz
+.DS_Store

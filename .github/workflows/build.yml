@@ -1,0 +1,164 @@
+name: Build Python for iOS
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      python_version:
+        description: 'CPython 版本'
+        required: false
+        default: '3.15.2'
+      pip_version:
+        description: 'pip 版本'
+        required: false
+        default: '26.3'
+
+permissions:
+  contents: write
+
+env:
+  PY_VERSION: ${{ github.event.inputs.python_version || '3.15.2' }}
+  PIP_VERSION: ${{ github.event.inputs.pip_version || '26.3' }}
+  MIN_IOS: '15.0'
+
+jobs:
+  build:
+    # 需要 macOS runner：iOS SDK + 交叉编译工具链
+    runs-on: macos-15
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检查工具链
+        run: |
+          xcodebuild -version
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK=$SDK" >> "$GITHUB_ENV"
+          echo "SDK: $SDK"
+          echo "版本: $(xcrun --sdk iphoneos --show-sdk-version)"
+          test -d "$SDK" || { echo "iOS SDK 不可用"; exit 1; }
+          clang --version | head -1
+          python3 -V
+
+      - name: 缓存依赖
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            deps-work
+          key: py-deps-${{ env.PY_VERSION }}-${{ env.MIN_IOS }}-v1
+
+      - name: 构建 iOS 原生依赖
+        run: |
+          chmod +x sources/*.sh sources/*.py
+          # openssl / ncurses / libffi / readline / xz / sqlite
+          JOBS=$(sysctl -n hw.ncpu) bash sources/build-deps.sh "$SDK" "$PWD/deps"
+          echo "=== 依赖产物 ==="
+          ls -1 deps/lib/*.a 2>/dev/null | head -20 || echo "(无)"
+
+      - name: 交叉编译 CPython
+        run: |
+          python3 sources/build.py \
+            --sdk "$SDK" \
+            --deps "$PWD/deps" \
+            --jobs "$(sysctl -n hw.ncpu)"
+
+      - name: 验证产物
+        run: |
+          STAGE=$(cat work/stage-path.txt)
+          PYROOT="$STAGE/var/jb/usr/local/python3.15"
+          echo "=== 结构 ==="
+          find "$PYROOT" -maxdepth 2 -type d | head -10
+          echo "=== 可执行 ==="
+          ls -la "$PYROOT/bin/" 2>/dev/null
+          echo "=== 平台校验 ==="
+          python3 - "$PYROOT/bin/python3.15" <<'PY'
+          import struct, sys, os
+          path = sys.argv[1]
+          if not os.path.exists(path):
+              print(f"找不到 {path}")
+              sys.exit(1)
+          b = open(path, 'rb').read(8192)
+          if struct.unpack('<I', b[:4])[0] != 0xfeedfacf:
+              print("不是 Mach-O")
+              sys.exit(1)
+          if struct.unpack('<i', b[4:8])[0] != 0x0100000c:
+              print("不是 arm64")
+              sys.exit(1)
+          n = struct.unpack('<I', b[16:20])[0]
+          off, plat = 32, None
+          for _ in range(n):
+              cmd, sz = struct.unpack('<II', b[off:off+8])
+              if cmd == 0x32:
+                  plat = struct.unpack('<I', b[off+8:off+12])[0]
+              off += sz
+              if off > len(b):
+                  break
+          print(f"platform={plat} ({'iOS' if plat==2 else 'macOS' if plat==1 else '?'})")
+          sys.exit(0 if plat == 2 else 1)
+          PY
+          echo "=== 体积 ==="
+          du -sh "$PYROOT"
+
+      - name: 打包 deb
+        run: |
+          STAGE=$(cat work/stage-path.txt)
+          OUT="dist/com.twoyears.python_${PY_VERSION}-1+rootless_iphoneos-arm64.deb"
+          mkdir -p dist
+          bash sources/package.sh "$STAGE" "$OUT"
+          echo "DEB=$OUT" >> "$GITHUB_ENV"
+
+      - name: 验证 deb
+        run: |
+          echo "=== ar 结构 ==="
+          python3 - "$DEB" <<'PY'
+          import sys
+          d = open(sys.argv[1], 'rb').read()
+          assert d[:8] == b'!<arch>\n', "不是 ar 归档"
+          for m in (b'debian-binary', b'control.tar', b'data.tar'):
+              assert m in d, f"缺少 {m}"
+          print("  ar 结构 OK")
+          PY
+          echo "=== 内容 ==="
+          python3 - "$DEB" <<'PY'
+          import io, sys, tarfile
+          d = open(sys.argv[1], 'rb').read()
+          i = d.find(b'data.tar.xz'); s = d.find(b'\xfd7zXZ', i)
+          t = tarfile.open(fileobj=io.BytesIO(d[s:]), mode='r:xz')
+          names = t.getnames()
+          print(f"  条目 {len(names)}")
+          for k in ['bin/python3.15', 'bin/pip3', 'lib/python3.15/os.py']:
+              hit = [n for n in names if n.endswith(k)]
+              print(f"  {'✓' if hit else '✗'} {k}")
+              assert hit, k
+          PY
+          ls -lh "$DEB"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-ios-deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+      - name: 发布 Release（tag）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.deb
+          generate_release_notes: true
+
+      - name: 发布 Release（main 滚动 latest）
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest Python for iOS
+          body: |
+            CPython ${{ env.PY_VERSION }} + pip ${{ env.PIP_VERSION }}
+            自动构建，来自 main 分支 ${{ github.sha }}
+          files: dist/*.deb
+          prerelease: true
+          make_latest: false
