@@ -11,7 +11,9 @@
 # 用法：
 #   bash build-deps.sh <iPhoneOS.sdk 路径> <输出前缀>
 # ============================================================================
-set -euo pipefail
+set -uo pipefail
+# 注意：不开 set -e。可选模块（ncurses/readline）失败要能继续，
+# set -e 会让子 shell 里的 make 失败直接退出整个脚本，|| 捕获不到。
 
 SDK="${1:?用法: build-deps.sh <sdk> <prefix>}"
 PREFIX="${2:?用法: build-deps.sh <sdk> <prefix>}"
@@ -114,21 +116,22 @@ build_ncurses() {
     fi
 
     log "配置 ncurses $ver"
-    (
-        cd "$WORK/$dir"
+    if (
+        cd "$WORK/$dir" || exit 1
         ./configure --host=arm-apple-darwin \
             --prefix="$PREFIX" \
             --without-shared --without-debug --without-ada \
             --enable-widec --without-manpages --without-progs \
-            --disable-db-install
+            --disable-db-install || exit 1
         log "编译 ncurses"
-        make -j"$JOBS"
-        make install
-    ) || {
-        # curses 是 Python 的可选模块，失败不该阻塞整体构建
+        make -j"$JOBS" || exit 1
+        make install || exit 1
+    ); then
+        log "ncurses 构建成功"
+    else
         log "⚠ ncurses 构建失败（curses 模块将不可用，其余不受影响）"
         return 0
-    }
+    fi
 }
 
 # ---------------------------------------------------------------- 4. libffi
@@ -141,15 +144,22 @@ build_libffi() {
     fi
     fetch_and_extract "https://github.com/libffi/libffi/releases/download/v$ver/$dir.tar.gz" "$dir"
     log "配置 libffi $ver"
-    (
-        cd "$WORK/$dir"
+    if (
+        cd "$WORK/$dir" || exit 1
+        # libffi 的 configure 会调 gcc -print-multi-os-directory，clang 不支持。
+        # 用 ac_cv 变量覆盖探测结果。
+        ac_cv_multi_os_directory="" \
         ./configure --host=arm-apple-darwin \
             --prefix="$PREFIX" \
-            --enable-static --disable-shared
+            --enable-static --disable-shared || exit 1
         log "编译 libffi"
-        make -j"$JOBS"
-        make install
-    ) || die "libffi 构建失败"
+        make -j"$JOBS" || exit 1
+        make install || exit 1
+    ); then
+        log "libffi 构建成功"
+    else
+        die "libffi 构建失败（ctypes 必需）"
+    fi
 }
 
 # ---------------------------------------------------------------- 5. readline
@@ -162,20 +172,22 @@ build_readline() {
     fi
     fetch_and_extract "https://ftp.gnu.org/gnu/readline/$dir.tar.gz" "$dir"
     log "配置 readline $ver"
-    (
-        cd "$WORK/$dir"
+    if (
+        cd "$WORK/$dir" || exit 1
         # 避免和 ncurses 冲突：readline 自带的 termcap
         ./configure --host=arm-apple-darwin \
             --prefix="$PREFIX" \
             --with-curses --enable-static --disable-shared \
-            bash_cv_wcwidth_broken=no
+            bash_cv_wcwidth_broken=no || exit 1
         log "编译 readline"
-        make -j"$JOBS"
-        make install
-    ) || {
+        make -j"$JOBS" || exit 1
+        make install || exit 1
+    ); then
+        log "readline 构建成功"
+    else
         log "⚠ readline 构建失败（readline 模块将不可用）"
         return 0
-    }
+    fi
 }
 
 # ---------------------------------------------------------------- 6. xz (liblzma)
