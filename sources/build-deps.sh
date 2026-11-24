@@ -137,6 +137,11 @@ build_ncurses() {
         log "ncurses 构建成功"
     else
         log "⚠ ncurses 构建失败（curses 模块将不可用，其余不受影响）"
+        # 清理可能装了一半的头文件，避免 CPython configure 误判为可用
+        rm -rf "$PREFIX/include/ncurses" "$PREFIX/include/ncursesw" 2>/dev/null || true
+        rm -f "$PREFIX/include/curses.h" "$PREFIX/include/panel.h" 2>/dev/null || true
+        rm -f "$PREFIX/lib/libncursesw.a" "$PREFIX/lib/libpanel.a" 2>/dev/null || true
+        log "  已清理残缺的 ncurses 头文件/库"
         return 0
     fi
 }

@@ -183,6 +183,16 @@ def main():
         ac_cv_func_system='no',
         ac_cv_func_sendfile='no',
         ac_cv_func_clock_settime='no',
+        # 让 curses 探测失败 —— ncurses 在 iOS 上编不出来，
+        # 但它的残缺头文件还在 $PREFIX/include 里，configure 会误判为可用，
+        # 导致 _cursesmodule 编译时 WINDOW/PANEL 未定义。
+        # 这两个变量让 configure 认为 curses 不可用，跳过该模块。
+        ac_cv_header_curses_h='no',
+        ac_cv_header_ncurses_h='no',
+        ac_cv_lib_ncursesw_initscr='no',
+        ac_cv_lib_ncurses_initscr='no',
+        ac_cv_lib_panel_new_panel='no',
+        ac_cv_search_initscr='no',
     )
 
     host = WORK / 'host'
@@ -222,13 +232,21 @@ def main():
                  f'--with-openssl={deps}'], ios, native_env,
                 logfile=WORK / 'ios-configure.log')
 
-        # iOS 没有 _scproxy（macOS 代理探测模块）
+        # 禁用 iOS 上编不过的模块
+        #
+        # _scproxy    macOS 专属（代理探测）
+        # _curses*    ncurses 在 iOS 上编不出来（缺 sys/ttydev.h /
+        #             sys/ioctl_compat.h），头文件不完整导致 WINDOW/PANEL
+        #             未定义。curses 是可选模块，agent 用不到。
         setup_local = ios / 'Modules/Setup.local'
         setup_local.touch(exist_ok=True)
         text = setup_local.read_text()
-        if '\n_scproxy\n' not in text:
+        needed = ['_scproxy', '_curses', '_curses_panel']
+        missing = [m for m in needed if f'\n{m}\n' not in text]
+        if missing:
             with open(setup_local, 'a') as f:
-                f.write('\n*disabled*\n_scproxy\n')
+                f.write('\n*disabled*\n' + '\n'.join(missing) + '\n')
+            log(f'禁用模块: {", ".join(missing)}')
 
         log('阶段 2/2：编译 iOS python')
         execute(make_args, ios, native_env, logfile=WORK / 'ios-build.log')
