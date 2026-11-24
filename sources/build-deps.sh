@@ -144,11 +144,25 @@ build_libffi() {
     fi
     fetch_and_extract "https://github.com/libffi/libffi/releases/download/v$ver/$dir.tar.gz" "$dir"
     log "配置 libffi $ver"
+
+    # libffi 的 configure 会调 `$CC -print-multi-os-directory`，clang 不支持。
+    # ac_cv 变量覆盖不可靠（不同版本变量名不同），改用 CC 包装脚本：
+    # 拦截这个选项，直接返回空。
+    local ccwrap="$WORK/cc-libffi.sh"
+    cat > "$ccwrap" <<WRAP
+#!/bin/sh
+for arg in "\$@"; do
+    case "\$arg" in
+        -print-multi-os-directory) exit 0 ;;
+    esac
+done
+exec $CC "\$@"
+WRAP
+    chmod +x "$ccwrap"
+
     if (
         cd "$WORK/$dir" || exit 1
-        # libffi 的 configure 会调 gcc -print-multi-os-directory，clang 不支持。
-        # 用 ac_cv 变量覆盖探测结果。
-        ac_cv_multi_os_directory="" \
+        CC="$ccwrap" \
         ./configure --host=arm-apple-darwin \
             --prefix="$PREFIX" \
             --enable-static --disable-shared || exit 1
@@ -223,15 +237,24 @@ build_sqlite() {
     fi
     fetch_and_extract "https://www.sqlite.org/2023/sqlite-autoconf-$ver.tar.gz" "$dir"
     log "配置 sqlite $ver"
-    (
-        cd "$WORK/$dir"
+    if (
+        cd "$WORK/$dir" || exit 1
+        # 只编静态库，不编 sqlite3 命令行 shell。
+        # shell.c 用了 system()，iOS SDK 把该函数标记为 unavailable。
         ./configure --host=arm-apple-darwin \
             --prefix="$PREFIX" \
-            --enable-static --disable-shared
-        log "编译 sqlite"
-        make -j"$JOBS"
-        make install
-    ) || die "sqlite 构建失败"
+            --enable-static --disable-shared \
+            --disable-readline \
+            CFLAGS="-O2 -fPIC -DSQLITE_OMIT_LOAD_EXTENSION" || exit 1
+        log "编译 sqlite（仅 libsqlite3.a，跳过 shell）"
+        # 只构建库目标，不碰 sqlite3 可执行文件
+        make -j"$JOBS" libsqlite3.la || exit 1
+        make install-libLTLIBRARIES install-includeHEADERS || exit 1
+    ); then
+        log "sqlite 构建成功"
+    else
+        die "sqlite 构建失败（sqlite3 模块必需）"
+    fi
 }
 
 # ---------------------------------------------------------------- 执行
