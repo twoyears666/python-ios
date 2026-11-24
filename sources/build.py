@@ -88,7 +88,14 @@ def execute(argv, cwd=None, env=None, logfile=None):
         )
         if proc.returncode != 0:
             detail = '' if out else (proc.stdout or '')[-3000:]
-            die(f'命令失败（{proc.returncode}）：{" ".join(str(a) for a in argv[:4])}\n{detail}')
+            tail = ''
+            if logfile:
+                try:
+                    content = Path(logfile).read_text(errors='replace')
+                    tail = '\n--- 日志尾部（' + str(logfile) + '）---\n' + content[-6000:]
+                except Exception:
+                    pass
+            die(f'命令失败（{proc.returncode}）：{" ".join(str(a) for a in argv[:4])}\n{detail}{tail}')
         return proc
     finally:
         if out:

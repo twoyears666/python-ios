@@ -107,12 +107,19 @@ build_ncurses() {
     fi
     fetch_and_extract "https://invisible-mirror.net/archives/ncurses/$dir.tar.gz" "$dir"
 
-    # iOS 上没有 <sys/ttydev.h>（BSD 遗留头），ncurses 的 lib_baudrate.c 依赖它。
-    # 打补丁：用 <sys/ioctl.h> 替代（iOS 有 TIOCGETA 等定义）。
+    # ncurses 的 tinfo/lib_baudrate.c 在 iOS 上编不过：
+    #   sys/ttydev.h      —— BSD 遗留头，iOS 没有
+    #   sys/ioctl_compat.h —— sys/ioctl.h 内部引用的，iOS 也没有
+    #
+    # 补丁：把这两处 include 都替换成 iOS 有的头，并用 iOS 的 Bxxx 常量。
     local baud="$WORK/$dir/ncurses/tinfo/lib_baudrate.c"
-    if [ -f "$baud" ] && grep -q "sys/ttydev.h" "$baud"; then
-        log "打补丁：lib_baudrate.c 去掉 sys/ttydev.h"
-        sed -i.bak 's|#include <sys/ttydev.h>|/* iOS: sys/ttydev.h 不存在，用 sys/ioctl.h 替代 */\n#include <sys/ioctl.h>|' "$baud"
+    if [ -f "$baud" ]; then
+        log "打补丁：lib_baudrate.c 适配 iOS"
+        # 去掉 sys/ttydev.h（不存在）
+        sed -i.bak 's|^#include <sys/ttydev.h>|/* iOS: 无 sys/ttydev.h */|' "$baud" 2>/dev/null || true
+        # sys/ioctl.h 在 iOS 上会引 ioctl_compat.h，也不存在 → 整行去掉，
+        # 只保留 sys/termios.h（iOS 有）
+        sed -i.bak2 's|^#include <sys/ioctl.h>|#include <sys/termios.h>|' "$baud" 2>/dev/null || true
     fi
 
     log "配置 ncurses $ver"
