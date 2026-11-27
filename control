@@ -5,7 +5,7 @@ Architecture: iphoneos-arm64
 Section: Development
 Priority: optional
 Maintainer: twoyears <noreply@localhost>
-Depends: firmware (>= 15.0), libssl3, libncursesw6, libffi8, liblzma5, libreadline8, libsqlite3-1, libgdbm6, libzstd1, libbrotli1, ca-certificates
+Depends: firmware (>= 15.0), ca-certificates
 Recommends: openssh-server
 Description: Native CPython 3.15 with pip for rootless jailbroken iOS
  Self-contained CPython built natively for iphoneos-arm64, with pip bundled.

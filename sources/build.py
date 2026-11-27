@@ -269,6 +269,30 @@ def main():
                 stdlib.write_text(''.join(out))
                 log(f'禁用模块（Setup.stdlib）: {", ".join(changed)}')
 
+        # _scproxy 换成空实现。
+        #
+        # 它是 macOS 专属的代理探测模块，iOS SDK 把
+        # kSCPropNetProxiesGopherProxy / SOCKS* 全标成 API_UNAVAILABLE(ios)，
+        # 编到就硬报错。上面 Setup.local + Setup.stdlib 两处禁用都试过，
+        # 这个模块依然会被编 —— CPython 的模块清单不止一处来源。
+        #
+        # 换成空模块最省事：能编过，urllib 里
+        # `from _scproxy import _get_proxy_settings` 拿不到符号，
+        # 会回退到读环境变量，和「模块不存在」的行为一致。
+        scproxy = ios / 'Modules/_scproxy.c'
+        if scproxy.is_file() and 'iOS 空实现' not in scproxy.read_text(errors='ignore'):
+            scproxy.write_text(
+                '/* iOS 空实现：iOS SDK 不支持 SystemConfiguration 的代理探测。\n'
+                '   原文件是 macOS 专属，见 build.py 里的说明。 */\n'
+                '#include "Python.h"\n\n'
+                'static struct PyModuleDef scproxy_module = {\n'
+                '    PyModuleDef_HEAD_INIT, "_scproxy", NULL, -1, NULL\n'
+                '};\n\n'
+                'PyMODINIT_FUNC\nPyInit__scproxy(void)\n{\n'
+                '    return PyModule_Create(&scproxy_module);\n}\n'
+            )
+            log('_scproxy.c 已替换为空实现')
+
         log('阶段 2/2：编译 iOS python')
         execute(make_args, ios, native_env, logfile=WORK / 'ios-build.log')
 

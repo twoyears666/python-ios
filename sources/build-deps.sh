@@ -97,108 +97,28 @@ build_openssl_from_procursus() {
     log "OpenSSL: $(ls -1 "$PREFIX/lib"/lib{ssl,crypto}.a 2>/dev/null | wc -l | tr -d ' ') 个静态库, $(ls -1 "$PREFIX/include/openssl"/*.h 2>/dev/null | wc -l | tr -d ' ') 个头文件"
 }
 
-# ---------------------------------------------------------------- 3. ncurses
-build_ncurses() {
-    local ver="6.4"
-    local dir="ncurses-$ver"
+# ---------------------------------------------------------------- 3. ncurses（跳过）
+#
+# 不再构建 ncurses。理由：
+#
+#   1) 它在 iOS 上确实编不过 —— <termios.h> 把 B0/B50/.../B38400 这些
+#      波特率常量裁掉了，ncurses 的 tinfo/lib_baudrate.c 用它们建 speed 表，
+#      直接 "use of undeclared identifier 'B0'"。
+#      试过两种补法（CFLAGS=-include、把常量插进源码），行号都位移了、
+#      说明改动确实生效，但 B0 依然 undeclared，说明还有别的编译路径。
+#      继续折腾的收益极低。
+#
+#   2) 没人依赖它：
+#      - readline 8.x 自带 termcap 回退，不链 ncurses 也能编（实测通过）
+#      - Python 3.15 的交互式行编辑用内置 _pyrepl，不需要 GNU readline
+#      - curses 模块本来就在 build.py 里禁用（agent 用不到）
+#
+# 所以只保留一个存在性检查，把结论说清楚，不再浪费 CI 时间。
+check_ncurses() {
     if [ -f "$PREFIX/lib/libncursesw.a" ]; then
-        log "ncurses 已存在，跳过"
-        return
-    fi
-    fetch_and_extract "https://invisible-mirror.net/archives/ncurses/$dir.tar.gz" "$dir"
-
-    # ncurses 的 tinfo/lib_baudrate.c 在 iOS 上编不过：
-    #   sys/ttydev.h      —— BSD 遗留头，iOS 没有
-    #   sys/ioctl_compat.h —— sys/ioctl.h 内部引用的，iOS 也没有
-    #
-    # 补丁：把这两处 include 都替换成 iOS 有的头，并用 iOS 的 Bxxx 常量。
-    local baud="$WORK/$dir/ncurses/tinfo/lib_baudrate.c"
-    if [ -f "$baud" ]; then
-        log "打补丁：lib_baudrate.c 适配 iOS"
-        # 去掉 sys/ttydev.h（不存在）
-        sed -i.bak 's|^#include <sys/ttydev.h>|/* iOS: 无 sys/ttydev.h */|' "$baud" 2>/dev/null || true
-        # sys/ioctl.h 在 iOS 上会引 ioctl_compat.h，也不存在 → 整行去掉，
-        # 只保留 sys/termios.h（iOS 有）
-        sed -i.bak2 's|^#include <sys/ioctl.h>|#include <sys/termios.h>|' "$baud" 2>/dev/null || true
-    fi
-
-    # iOS 的 <termios.h> 不定义 B0/B50/.../B38400 这些波特率常量
-    # （Darwin 桌面版有，iOS 版被裁掉了），而 ncurses 的
-    # tinfo/lib_baudrate.c 用它们建 speed 表，缺一个就整表编不过：
-    #   error: use of undeclared identifier 'B0'
-    #
-    # 试过用 CFLAGS=-include 补，但 ncurses 的 Makefile 里不同目标用的
-    # 编译变量不一样，实测有一部分 TU 拿不到这个参数，还是编不过。
-    # 所以直接写进源码 —— 不再依赖任何编译参数传递。
-    local baudhdr="$WORK/ios-termios-baud.h"
-    cat > "$baudhdr" <<'BAUD'
-/* iOS <termios.h> 缺少的波特率常量，数值与 Darwin 桌面版一致。
-   用 #ifndef 包住，真有的平台不会被覆盖。 */
-#ifndef B0
-#define B0      0
-#define B50     50
-#define B75     75
-#define B110    110
-#define B134    134
-#define B150    150
-#define B200    200
-#define B300    300
-#define B600    600
-#define B1200   1200
-#define B1800   1800
-#define B2400   2400
-#define B4800   4800
-#define B9600   9600
-#define B19200  19200
-#define B38400  38400
-#define B7200   7200
-#define B14400  14400
-#define B28800  28800
-#define B57600  57600
-#define B76800  76800
-#define B115200 115200
-#define B230400 230400
-#endif
-BAUD
-    local ncflags="$CFLAGS -include $baudhdr"
-
-    # 关键：把常量块插到 lib_baudrate.c 的**最前面**。
-    #
-    # 之前插在 #include <sys/termios.h> 后面，行号确实位移了 27 行
-    # （说明插入成功），但 B0 依然 undeclared —— 那行 include 落在
-    # 某个条件编译块里，iOS 上整块不生效，连带我们的定义也一起被跳过。
-    # 只有放在文件最开头才与任何条件编译无关。
-    #
-    # 用标记行防止重复插入（deps-work 有缓存，脚本可能对同一份源码跑两次）。
-    if [ -f "$baud" ] && ! grep -q 'iOS-IOS-TERMIOS-BAUD' "$baud"; then
-        { printf '/* iOS-IOS-TERMIOS-BAUD: 见 build-deps.sh */\n'
-          cat "$baudhdr"
-          cat "$baud"
-        } > "$baud.new" && mv "$baud.new" "$baud"
-        log "  已把波特率常量前置到 lib_baudrate.c"
-    fi
-
-    log "配置 ncurses $ver"
-    if (
-        cd "$WORK/$dir" || exit 1
-        CFLAGS="$ncflags" ./configure --host=arm-apple-darwin \
-            --prefix="$PREFIX" \
-            --without-shared --without-debug --without-ada \
-            --enable-widec --without-manpages --without-progs \
-            --disable-db-install || exit 1
-        log "编译 ncurses"
-        make -j"$JOBS" || exit 1
-        make install || exit 1
-    ); then
-        log "ncurses 构建成功"
+        log "ncurses: 已存在（缓存）"
     else
-        log "⚠ ncurses 构建失败（curses 模块将不可用，其余不受影响）"
-        # 清理可能装了一半的头文件，避免 CPython configure 误判为可用
-        rm -rf "$PREFIX/include/ncurses" "$PREFIX/include/ncursesw" 2>/dev/null || true
-        rm -f "$PREFIX/include/curses.h" "$PREFIX/include/panel.h" 2>/dev/null || true
-        rm -f "$PREFIX/lib/libncursesw.a" "$PREFIX/lib/libpanel.a" 2>/dev/null || true
-        log "  已清理残缺的 ncurses 头文件/库"
-        return 0
+        log "ncurses: 跳过构建（iOS 编不出来，且没有依赖方；curses 模块不可用）"
     fi
 }
 
@@ -328,7 +248,7 @@ build_sqlite() {
 # ---------------------------------------------------------------- 执行
 log "构建依赖到 $PREFIX"
 build_openssl_from_procursus
-build_ncurses
+check_ncurses
 build_libffi
 build_readline
 build_xz

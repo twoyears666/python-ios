@@ -30,12 +30,21 @@ python3 -c "import ssl, sqlite3, zlib, lzma, bz2, curses, readline, ctypes"
 
 ## 依赖
 
-运行时依赖（Procursus 提供）：
+`Depends: firmware (>= 15.0), ca-certificates`
+
+就这两个。**没有** libssl / libncursesw / libffi / liblzma / libreadline /
+libsqlite3 / libgdbm / libzstd / libbrotli —— 它们全是静态链进去的：
 
 ```
-libssl3  libncursesw6  libffi8  liblzma5  libreadline8
-libsqlite3-1  libgdbm6  libzstd1  libbrotli1  ca-certificates
+$ otool -L var/jb/usr/local/python3.15/bin/python3.15
+  /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation
+  /usr/lib/libSystem.B.dylib
 ```
+
+（之前 control 里写了 9 个系统库依赖，是错的。多写的依赖只会让
+Sileo 因为「找不到某个包」直接拒绝安装。）
+
+`ca-certificates` 留着是因为 ssl 要读系统 CA 才能校验 HTTPS。
 
 ## 构建
 
@@ -91,13 +100,33 @@ ac_cv_file__dev_ptc=no
 
 ### 禁用 _scproxy
 
-macOS 专属的代理探测模块，iOS 上没有：
+macOS 专属的代理探测模块。iOS SDK 把
+`kSCPropNetProxiesGopherProxy` / `kSCPropNetProxiesSOCKS*`
+全标成 `API_UNAVAILABLE(ios)`，编到就硬报错。
 
-```
-Modules/Setup.local:
-  *disabled*
-  _scproxy
-```
+只写 `Modules/Setup.local` 的 `*disabled*` **不可靠** ——
+实测同一份代码一次生效一次不生效。`Modules/Setup.stdlib` 才是
+makesetup 生成 `Modules/Setup` 的来源，所以两处都改。
+
+最后仍然会被编到，于是把 `Modules/_scproxy.c` 直接换成空模块：
+能编过，`from _scproxy import _get_proxy_settings` 拿不到符号，
+urllib 回退到读环境变量 —— 与「模块不存在」行为一致。
+
+### 不构建 ncurses
+
+iOS 的 `<termios.h>` 把 `B0`/`B50`/…/`B38400` 这些波特率常量裁掉了，
+ncurses 的 `tinfo/lib_baudrate.c` 用它们建 speed 表，直接
+`error: use of undeclared identifier 'B0'`。
+
+试过两种补法（`CFLAGS=-include`、把常量块插进源码），行号都位移了、
+说明改动确实生效，但 B0 依然 undeclared，说明还有别的编译路径在起作用。
+继续折腾收益极低，因为**没有依赖方**：
+
+- readline 8.x 自带 termcap 回退，不链 ncurses 也能编（实测通过）
+- Python 3.15 的交互式行编辑用内置 `_pyrepl`，不需要 GNU readline
+- `curses` 模块本来就在 build.py 里禁用（agent 用不到）
+
+所以 `build-deps.sh` 里只留一个 `check_ncurses`，把结论打印出来。
 
 ## 已知限制
 
