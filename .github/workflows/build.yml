@@ -68,7 +68,10 @@ jobs:
 
       - name: 验证产物
         run: |
-          STAGE=$(cat work/stage-path.txt)
+          # build.py 把 staging 路径写在 sources/work/ 下，
+          # 这里以前读的是 work/ —— cat 失败 + bash -e 直接退出，
+          # 看起来像「编译失败」，其实 CPython 早就编好了。
+          STAGE=$(cat sources/work/stage-path.txt 2>/dev/null || cat work/stage-path.txt)
           PYROOT="$STAGE/var/jb/usr/local/python3.15"
           echo "=== 结构 ==="
           find "$PYROOT" -maxdepth 2 -type d | head -10
@@ -105,7 +108,10 @@ jobs:
 
       - name: 打包 deb
         run: |
-          STAGE=$(cat work/stage-path.txt)
+          # build.py 把 staging 路径写在 sources/work/ 下，
+          # 这里以前读的是 work/ —— cat 失败 + bash -e 直接退出，
+          # 看起来像「编译失败」，其实 CPython 早就编好了。
+          STAGE=$(cat sources/work/stage-path.txt 2>/dev/null || cat work/stage-path.txt)
           OUT="dist/com.twoyears.python_${PY_VERSION}-1+rootless_iphoneos-arm64.deb"
           mkdir -p dist
           bash sources/package.sh "$STAGE" "$OUT"

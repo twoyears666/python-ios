@@ -122,10 +122,48 @@ build_ncurses() {
         sed -i.bak2 's|^#include <sys/ioctl.h>|#include <sys/termios.h>|' "$baud" 2>/dev/null || true
     fi
 
+    # iOS 的 <termios.h> 不定义 B0/B50/.../B38400 这些波特率常量
+    # （Darwin 桌面版有，iOS 版被裁掉了），而 ncurses 的
+    # tinfo/lib_baudrate.c 用它们建 speed 表，缺一个就整表编不过。
+    #
+    # 用 -include 在编译前把常量补上，比 sed 改源码稳：
+    # 不依赖 include 顺序，也不怕 ncurses 换版本后行号变化。
+    local baudhdr="$WORK/ios-termios-baud.h"
+    cat > "$baudhdr" <<'BAUD'
+/* iOS <termios.h> 缺少的波特率常量，数值与 Darwin 桌面版一致。
+   用 #ifndef 包住，真有的平台不会被覆盖。 */
+#ifndef B0
+#define B0      0
+#define B50     50
+#define B75     75
+#define B110    110
+#define B134    134
+#define B150    150
+#define B200    200
+#define B300    300
+#define B600    600
+#define B1200   1200
+#define B1800   1800
+#define B2400   2400
+#define B4800   4800
+#define B9600   9600
+#define B19200  19200
+#define B38400  38400
+#define B7200   7200
+#define B14400  14400
+#define B28800  28800
+#define B57600  57600
+#define B76800  76800
+#define B115200 115200
+#define B230400 230400
+#endif
+BAUD
+    local ncflags="$CFLAGS -include $baudhdr"
+
     log "配置 ncurses $ver"
     if (
         cd "$WORK/$dir" || exit 1
-        ./configure --host=arm-apple-darwin \
+        CFLAGS="$ncflags" ./configure --host=arm-apple-darwin \
             --prefix="$PREFIX" \
             --without-shared --without-debug --without-ada \
             --enable-widec --without-manpages --without-progs \
