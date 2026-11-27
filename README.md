@@ -130,6 +130,13 @@ ncurses 的 `tinfo/lib_baudrate.c` 用它们建 speed 表，直接
 
 ## 已知限制
 
+- **没有 `import readline`**（`libreadline.a` 编出来了，但 CPython 的
+  `Modules/readline.c` 没链上）。不影响使用：Python 3.13+ 的交互式行编辑
+  由内置 `_pyrepl` 提供，`input()` 也走它。
+- **没有 `curses`**（见上「不构建 ncurses」）
+- **`_scproxy` 是空模块**（见上「禁用 _scproxy」），
+  `urllib` 的代理探测回退到读环境变量
+
 - **numpy / pandas / lxml 需要单独编译**（它们是 C 扩展，不是纯 Python）
 - 纯 Python 包（`pip install requests` 等）可以直接用
 - 交叉编译的扩展模块需要 `-bundle -bundle_loader` 链接，普通 `pip install` 编不了
