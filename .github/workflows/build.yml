@@ -49,7 +49,9 @@ jobs:
           path: |
             deps
             deps-work
-          key: py-deps-${{ env.PY_VERSION }}-${{ env.MIN_IOS }}-v1
+          # v2：ncurses 补丁方式变了（改源码而不是 -include），
+          # 必须让 deps-work 重新解包，否则会复用上一轮改了一半的源码。
+          key: py-deps-${{ env.PY_VERSION }}-${{ env.MIN_IOS }}-v2
 
       - name: 构建 iOS 原生依赖
         run: |

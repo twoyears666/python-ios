@@ -124,10 +124,12 @@ build_ncurses() {
 
     # iOS 的 <termios.h> 不定义 B0/B50/.../B38400 这些波特率常量
     # （Darwin 桌面版有，iOS 版被裁掉了），而 ncurses 的
-    # tinfo/lib_baudrate.c 用它们建 speed 表，缺一个就整表编不过。
+    # tinfo/lib_baudrate.c 用它们建 speed 表，缺一个就整表编不过：
+    #   error: use of undeclared identifier 'B0'
     #
-    # 用 -include 在编译前把常量补上，比 sed 改源码稳：
-    # 不依赖 include 顺序，也不怕 ncurses 换版本后行号变化。
+    # 试过用 CFLAGS=-include 补，但 ncurses 的 Makefile 里不同目标用的
+    # 编译变量不一样，实测有一部分 TU 拿不到这个参数，还是编不过。
+    # 所以直接写进源码 —— 不再依赖任何编译参数传递。
     local baudhdr="$WORK/ios-termios-baud.h"
     cat > "$baudhdr" <<'BAUD'
 /* iOS <termios.h> 缺少的波特率常量，数值与 Darwin 桌面版一致。
@@ -159,6 +161,28 @@ build_ncurses() {
 #endif
 BAUD
     local ncflags="$CFLAGS -include $baudhdr"
+
+    # 关键：把常量块真正插进 lib_baudrate.c。
+    # 插在我们自己替换出来的 #include <sys/termios.h> 之后，
+    # 这样既在 termios 之后（不冲突），又在 DATA 表之前（用得上）。
+    if [ -f "$baud" ]; then
+        if grep -q '^#include <sys/termios.h>' "$baud"; then
+            awk -v hdr="$baudhdr" '
+                { print }
+                /^#include <sys\/termios.h>/ && !done {
+                    while ((getline line < hdr) > 0) print line
+                    close(hdr)
+                    done = 1
+                }
+            ' "$baud" > "$baud.new" && mv "$baud.new" "$baud"
+            log "  已把波特率常量插入 lib_baudrate.c"
+        else
+            # 兜底：直接拼到文件最前面。iOS 的 termios.h 不定义这些宏，
+            # 不会冲突。
+            cat "$baudhdr" "$baud" > "$baud.new" && mv "$baud.new" "$baud"
+            log "  已把波特率常量前置到 lib_baudrate.c（兜底）"
+        fi
+    fi
 
     log "配置 ncurses $ver"
     if (
