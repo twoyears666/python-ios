@@ -234,19 +234,40 @@ def main():
 
         # 禁用 iOS 上编不过的模块
         #
-        # _scproxy    macOS 专属（代理探测）
-        # _curses*    ncurses 在 iOS 上编不出来（缺 sys/ttydev.h /
-        #             sys/ioctl_compat.h），头文件不完整导致 WINDOW/PANEL
-        #             未定义。curses 是可选模块，agent 用不到。
+        # _scproxy    macOS 专属（代理探测）。iOS SDK 里
+        #             kSCPropNetProxiesGopherProxy / SOCKS* 都标了
+        #             API_UNAVAILABLE(ios)，编到就硬报错。
+        # _curses*    ncurses 在 iOS 上编不出来，且 agent 用不到。
+        #
+        # 只写 Modules/Setup.local 的 *disabled* 不够可靠：实测同样的
+        # 写法出现过一次生效、一次不生效（_scproxy 还是被编了）。
+        # Modules/Setup.stdlib 才是 makesetup 生成 Modules/Setup 的来源，
+        # 所以两处都改，并且把 Setup.stdlib 里对应的行直接注释掉。
+        needed = ['_scproxy', '_curses', '_curses_panel']
+
         setup_local = ios / 'Modules/Setup.local'
         setup_local.touch(exist_ok=True)
         text = setup_local.read_text()
-        needed = ['_scproxy', '_curses', '_curses_panel']
         missing = [m for m in needed if f'\n{m}\n' not in text]
         if missing:
             with open(setup_local, 'a') as f:
                 f.write('\n*disabled*\n' + '\n'.join(missing) + '\n')
-            log(f'禁用模块: {", ".join(missing)}')
+            log(f'禁用模块（Setup.local）: {", ".join(missing)}')
+
+        stdlib = ios / 'Modules/Setup.stdlib'
+        if stdlib.is_file():
+            out, changed = [], []
+            for line in stdlib.read_text().splitlines(keepends=True):
+                stripped = line.strip()
+                name = stripped.split(None, 1)[0] if stripped else ''
+                if name in needed and not stripped.startswith('#'):
+                    out.append('# iOS 禁用: ' + line)
+                    changed.append(name)
+                else:
+                    out.append(line)
+            if changed:
+                stdlib.write_text(''.join(out))
+                log(f'禁用模块（Setup.stdlib）: {", ".join(changed)}')
 
         log('阶段 2/2：编译 iOS python')
         execute(make_args, ios, native_env, logfile=WORK / 'ios-build.log')

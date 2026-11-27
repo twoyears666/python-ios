@@ -162,26 +162,20 @@ build_ncurses() {
 BAUD
     local ncflags="$CFLAGS -include $baudhdr"
 
-    # 关键：把常量块真正插进 lib_baudrate.c。
-    # 插在我们自己替换出来的 #include <sys/termios.h> 之后，
-    # 这样既在 termios 之后（不冲突），又在 DATA 表之前（用得上）。
-    if [ -f "$baud" ]; then
-        if grep -q '^#include <sys/termios.h>' "$baud"; then
-            awk -v hdr="$baudhdr" '
-                { print }
-                /^#include <sys\/termios.h>/ && !done {
-                    while ((getline line < hdr) > 0) print line
-                    close(hdr)
-                    done = 1
-                }
-            ' "$baud" > "$baud.new" && mv "$baud.new" "$baud"
-            log "  已把波特率常量插入 lib_baudrate.c"
-        else
-            # 兜底：直接拼到文件最前面。iOS 的 termios.h 不定义这些宏，
-            # 不会冲突。
-            cat "$baudhdr" "$baud" > "$baud.new" && mv "$baud.new" "$baud"
-            log "  已把波特率常量前置到 lib_baudrate.c（兜底）"
-        fi
+    # 关键：把常量块插到 lib_baudrate.c 的**最前面**。
+    #
+    # 之前插在 #include <sys/termios.h> 后面，行号确实位移了 27 行
+    # （说明插入成功），但 B0 依然 undeclared —— 那行 include 落在
+    # 某个条件编译块里，iOS 上整块不生效，连带我们的定义也一起被跳过。
+    # 只有放在文件最开头才与任何条件编译无关。
+    #
+    # 用标记行防止重复插入（deps-work 有缓存，脚本可能对同一份源码跑两次）。
+    if [ -f "$baud" ] && ! grep -q 'iOS-IOS-TERMIOS-BAUD' "$baud"; then
+        { printf '/* iOS-IOS-TERMIOS-BAUD: 见 build-deps.sh */\n'
+          cat "$baudhdr"
+          cat "$baud"
+        } > "$baud.new" && mv "$baud.new" "$baud"
+        log "  已把波特率常量前置到 lib_baudrate.c"
     fi
 
     log "配置 ncurses $ver"
