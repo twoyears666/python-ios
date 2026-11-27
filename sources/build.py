@@ -254,6 +254,9 @@ def main():
                 f.write('\n*disabled*\n' + '\n'.join(missing) + '\n')
             log(f'禁用模块（Setup.local）: {", ".join(missing)}')
 
+        # 注意：ios 是 out-of-tree 构建目录，这里的 Setup.stdlib 是
+        # configure 生成的副本，make 有可能按时间戳重新生成、把改动冲掉。
+        # 所以它只能算兜底，真正保证 _scproxy 编得过的是下面换空实现。
         stdlib = ios / 'Modules/Setup.stdlib'
         if stdlib.is_file():
             out, changed = [], []
@@ -279,7 +282,11 @@ def main():
         # 换成空模块最省事：能编过，urllib 里
         # `from _scproxy import _get_proxy_settings` 拿不到符号，
         # 会回退到读环境变量，和「模块不存在」的行为一致。
-        scproxy = ios / 'Modules/_scproxy.c'
+        # 注意：必须改**源码树** src 里的文件。
+        # ios 是 out-of-tree 构建目录，Modules/_scproxy.c 是从 srcdir 编的；
+        # 之前写成 ios/Modules/_scproxy.c，那里根本没有这个文件，
+        # 于是什么都没改，编译时用的还是原版。
+        scproxy = src / 'Modules/_scproxy.c'
         if scproxy.is_file() and 'iOS 空实现' not in scproxy.read_text(errors='ignore'):
             scproxy.write_text(
                 '/* iOS 空实现：iOS SDK 不支持 SystemConfiguration 的代理探测。\n'
